@@ -1,14 +1,14 @@
 import requests
-import html
 import re
 import csv
+import html
 from datetime import datetime
 
 # Function to clean HTML content
 def clean_html(raw_html):
-    cleanr = re.compile('<.*?>')  # Regex to find HTML tags
-    cleantext = re.sub(cleanr, '', raw_html)  # Remove HTML tags
-    return html.unescape(cleantext)  # Unescape HTML entities like &amp;, &lt;, etc.
+    cleanr = re.compile('<.*?>')
+    cleantext = re.sub(cleanr, '', raw_html)
+    return html.unescape(cleantext)
 
 # Mapping for danger ratings
 danger_rating_map = {
@@ -23,79 +23,113 @@ danger_rating_map = {
 
 # Function to convert danger ratings
 def convert_danger_ratings(danger_ratings):
-    converted_ratings = []
-    for rating in danger_ratings:
-        # Assuming the data structure is {'days': [{'position': 1, 'alp': 'low', ...}, ...]}
-        converted_ratings.extend([
-            danger_rating_map.get(rating.get('alp', 'noRating'), 0),
-            danger_rating_map.get(rating.get('tln', 'noRating'), 0),
-            danger_rating_map.get(rating.get('btl', 'noRating'), 0)
-        ])
+    # Initialize the list with zeros for all expected positions
+    converted_ratings = [0] * 9
+    for idx, rating in enumerate(danger_ratings):
+        # Map the string ratings to their numeric values
+        converted_ratings[idx*3] = danger_rating_map.get(rating['alp'].lower(), 0)
+        converted_ratings[idx*3 + 1] = danger_rating_map.get(rating['tln'].lower(), 0)
+        converted_ratings[idx*3 + 2] = danger_rating_map.get(rating['btl'].lower(), 0)
     return converted_ratings
 
-# API endpoint
-api_endpoint = "https://avalanche.state.co.us/api-proxy/avid?_api_proxy_uri=/products/all?datetime={date}&includeExpired=true"
-current_date = datetime.utcnow().isoformat(timespec='milliseconds') + 'Z'
-full_endpoint = api_endpoint.format(date=current_date)
+# Function to fetch data from the API
+def fetch_data(api_endpoint):
+    try:
+        response = requests.get(api_endpoint)
+        response.raise_for_status()
+        return response.json()
+    except requests.HTTPError as http_err:
+        print(f"HTTP error occurred: {http_err}")
+    except Exception as err:
+        print(f"An error occurred: {err}")
+    return None
 
-# CSV setup
-current_date_str = datetime.utcnow().strftime('%Y-%m-%d')
-csv_filename = f'/workspaces/ksp-av/caic_collect/data/avalanche_forecasts_{current_date_str}.csv'
-
-# Make the GET request
-response = requests.get(full_endpoint)
-
-# If the request was successful
-if response.status_code == 200:
-    # Parse the JSON response
-    data = response.json()
-
-    # Open the CSV file
-    with open(csv_filename, mode='w', newline='', encoding='utf-8') as file:
-        writer = csv.writer(file)
-        # Write the headers
-        writer.writerow([
+def write_to_csv(data, filename):
+    with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        fieldnames = [
             'Forecaster', 'IssueDateTime', 'Title', 'AvalancheSummary',
             'Message', 'ConfidenceRating', 'DangerRatingPosition1Alp',
             'DangerRatingPosition1Tln', 'DangerRatingPosition1Btl',
             'DangerRatingPosition2Alp', 'DangerRatingPosition2Tln',
             'DangerRatingPosition2Btl', 'DangerRatingPosition3Alp',
             'DangerRatingPosition3Tln', 'DangerRatingPosition3Btl'
-        ])
+        ]
+        writer = csv.DictWriter(file, fieldnames=fieldnames)
+        writer.writeheader()
 
-        # Process each forecast
         for forecast in data:
-            # Check if 'Title' contains 'Regional' and extract 'message' or 'avalancheSummary'
-            if 'Regional' in forecast.get('title', ''):
-                message = clean_html(forecast.get('message', 'No message'))
-                avalanche_summary = ''
-            else:
-                message = ''
-                days = forecast.get('avalancheSummary', {}).get('days', [])
-                if days:  # Check if the list is not empty
-                    avalanche_summary = clean_html(days[0].get('content', 'No summary'))
-                else:
-                    avalanche_summary = 'No summary'
+            # Default values for fields
+            confidence_rating = 'noRating'
+            danger_ratings = [0] * 9
 
-            # Extract other required information
+            # Check and assign the confidence rating if available
+            if 'confidence' in forecast and 'days' in forecast['confidence'] and forecast['confidence']['days']:
+                confidence_rating = forecast['confidence']['days'][0].get('rating', 'noRating').lower()
+
+            # Check and convert danger ratings if available and type is 'avalancheforecast'
+            if forecast['type'] == 'avalancheforecast' and 'dangerRatings' in forecast and 'days' in forecast['dangerRatings']:
+                danger_ratings = convert_danger_ratings(forecast['dangerRatings']['days'])
+
+            # Skip entries with 'No Forecast' danger ratings
+            if forecast['type'] == 'avalancheforecast' and all(danger_rating == 0 for danger_rating in danger_ratings):
+                continue
+
+            # Extract the relevant fields
+            title = forecast.get('title', 'No title')
             forecaster = forecast.get('forecaster', 'No forecaster')
             issue_datetime = forecast.get('issueDateTime', 'No issue date time')
-            title = forecast.get('title', 'No title')
-            confidence_rating = forecast.get('confidence', {}).get('days', [{}])[0].get('rating', 'No rating')
-            
-            # Convert danger ratings
-            danger_ratings = convert_danger_ratings(forecast.get('dangerRatings', {}).get('days', []))
+
+            # Process both 'avalancheforecast' and 'regionaldiscussion'
+            avalanche_summary = ''
+            message = ''
+            if forecast.get('avalancheSummary', {}).get('days'):
+                first_day_summary = forecast['avalancheSummary']['days'][0]
+                if first_day_summary:
+                    avalanche_summary = clean_html(first_day_summary.get('content', ''))
+            elif forecast['type'] == 'regionaldiscussion':
+                message = clean_html(forecast.get('message', ''))
+
+            numeric_confidence_rating = danger_rating_map.get(confidence_rating, 0)
 
             # Create the CSV row
-            csv_row = [
-                forecaster, issue_datetime, title, avalanche_summary,
-                message, confidence_rating, *danger_ratings
-            ]
+            csv_row = {
+                'Forecaster': forecaster,
+                'IssueDateTime': issue_datetime,
+                'Title': title,
+                'AvalancheSummary': avalanche_summary,
+                'Message': message,
+                'ConfidenceRating': numeric_confidence_rating,
+                'DangerRatingPosition1Alp': danger_ratings[0],
+                'DangerRatingPosition1Tln': danger_ratings[1],
+                'DangerRatingPosition1Btl': danger_ratings[2],
+                'DangerRatingPosition2Alp': danger_ratings[3],
+                'DangerRatingPosition2Tln': danger_ratings[4],
+                'DangerRatingPosition2Btl': danger_ratings[5],
+                'DangerRatingPosition3Alp': danger_ratings[6],
+                'DangerRatingPosition3Tln': danger_ratings[7],
+                'DangerRatingPosition3Btl': danger_ratings[8]
+            }
 
-            # Write the CSV row
             writer.writerow(csv_row)
-
-    print(f"Data has been written to: {csv_filename}")
-
-else:
-    print(f"Failed to fetch data: {response.status_code}")
+            
+# Main script logic
+if __name__ == "__main__":
+    # API endpoint configuration
+    current_date = datetime.utcnow().isoformat(timespec='milliseconds') + 'Z'
+    api_endpoint = f"https://avalanche.state.co.us/api-proxy/avid?_api_proxy_uri=/products/all?datetime={current_date}&includeExpired=true"
+    
+    # Fetch data from API
+    forecasts_data = fetch_data(api_endpoint)
+    
+    # Check if data was successfully fetched
+    if forecasts_data:
+        # CSV file configuration
+        current_date_str = datetime.utcnow().strftime('%Y-%m-%d')
+        csv_directory = '/workspaces/ksp-av/caic_collect/data'  # Directory where you want to save the CSV
+        csv_filename = f'{csv_directory}/avalanche_forecasts_{current_date_str}.csv'
+        
+        # Write data to CSV
+        write_to_csv(forecasts_data, csv_filename)
+        print(f"Data has been written to: {csv_filename}")
+    else:
+        print("Failed to fetch data from the API.")
