@@ -44,15 +44,17 @@ def fetch_data(api_endpoint):
         print(f"An error occurred: {err}")
     return None
 
+# Function to write data to CSV
 def write_to_csv(data, filename):
     with open(filename, mode='w', newline='', encoding='utf-8') as file:
+        # Updated fieldnames to indicate the day for the danger ratings
         fieldnames = [
             'Forecaster', 'IssueDateTime', 'Title', 'AvalancheSummary',
-            'Message', 'ConfidenceRating', 'DangerRatingPosition1Alp',
-            'DangerRatingPosition1Tln', 'DangerRatingPosition1Btl',
-            'DangerRatingPosition2Alp', 'DangerRatingPosition2Tln',
-            'DangerRatingPosition2Btl', 'DangerRatingPosition3Alp',
-            'DangerRatingPosition3Tln', 'DangerRatingPosition3Btl'
+            'Message', 'ConfidenceRating', 'TodayDangerRatingAlp',
+            'TodayDangerRatingTln', 'TodayDangerRatingBtl',
+            'TomorrowDangerRatingAlp', 'TomorrowDangerRatingTln',
+            'TomorrowDangerRatingBtl', 'DayAfterTomorrowDangerRatingAlp',
+            'DayAfterTomorrowDangerRatingTln', 'DayAfterTomorrowDangerRatingBtl'
         ]
         writer = csv.DictWriter(file, fieldnames=fieldnames)
         writer.writeheader()
@@ -91,6 +93,9 @@ def write_to_csv(data, filename):
 
             numeric_confidence_rating = danger_rating_map.get(confidence_rating, 0)
 
+             # Convert danger ratings, if available
+            danger_ratings = convert_danger_ratings(forecast['dangerRatings']['days']) if 'dangerRatings' in forecast else [0] * 9
+
             # Create the CSV row
             csv_row = {
                 'Forecaster': forecaster,
@@ -99,15 +104,15 @@ def write_to_csv(data, filename):
                 'AvalancheSummary': avalanche_summary,
                 'Message': message,
                 'ConfidenceRating': numeric_confidence_rating,
-                'DangerRatingPosition1Alp': danger_ratings[0],
-                'DangerRatingPosition1Tln': danger_ratings[1],
-                'DangerRatingPosition1Btl': danger_ratings[2],
-                'DangerRatingPosition2Alp': danger_ratings[3],
-                'DangerRatingPosition2Tln': danger_ratings[4],
-                'DangerRatingPosition2Btl': danger_ratings[5],
-                'DangerRatingPosition3Alp': danger_ratings[6],
-                'DangerRatingPosition3Tln': danger_ratings[7],
-                'DangerRatingPosition3Btl': danger_ratings[8]
+                'TodayDangerRatingAlp': danger_ratings[0],
+                'TodayDangerRatingTln': danger_ratings[1],
+                'TodayDangerRatingBtl': danger_ratings[2],
+                'TomorrowDangerRatingAlp': danger_ratings[3],
+                'TomorrowDangerRatingTln': danger_ratings[4],
+                'TomorrowDangerRatingBtl': danger_ratings[5],
+                'DayAfterTomorrowDangerRatingAlp': danger_ratings[6],
+                'DayAfterTomorrowDangerRatingTln': danger_ratings[7],
+                'DayAfterTomorrowDangerRatingBtl': danger_ratings[8]
             }
 
             writer.writerow(csv_row)
